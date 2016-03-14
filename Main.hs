@@ -40,6 +40,100 @@ samples sampleMax total g = return $ flip runRand g
                                    $ (,) <$> getRandomR (1,sampleMax)
                                          <*> getRandomR (0,total-1)
 
+#elif defined(SPLITMIX)
+import Control.Monad.Random
+import System.Random.SplitMix
+
+type RGen = SplitMix64
+
+initGen :: IO RGen
+initGen = newSplitMix64
+
+initGens :: Int -> IO [RGen]
+initGens threads = do
+    g <- initGen
+    let f _ 0   = []
+        f !g !n = let (g1, g2) = split g
+                    in g1 : f g2 (n - 1)
+        !gs = f g threads
+    return gs
+
+boundedGen :: (Int, Int) -> RGen -> (Int, RGen)
+boundedGen (left, right) gen = (resultValue, newGen)
+  where
+    (!newValue, !newGen) = next gen
+    !resultValue = newValue `mod` (right - left + 1) + left
+
+thenGen :: (Int, Int) -> (Int, Int) -> RGen -> ((Int, Int), RGen)
+thenGen bounds1 bounds2 gen = ((value, newValue), newGen')
+  where
+    (!value, !newGen) = boundedGen bounds1 gen
+    (!newValue, !newGen') = boundedGen bounds2 newGen
+
+
+samples :: Int -> Int -> RGen -> IO ((Int, Int), RGen)
+samples sampleMax total = return . thenGen (1,sampleMax)  (0,total-1)
+
+#elif defined(PCG_PURE_NEXT)
+import System.Random.PCG.Fast.Pure
+import System.Random (next, split)
+
+type RGen = FrozenGen
+
+initGen :: IO RGen
+initGen = join $ fmap save create
+
+initGens :: Int -> IO [RGen]
+initGens threads = do
+    g <- initGen
+    let f _ 0   = []
+        f !g !n = let (g1, g2) = split g
+                    in g1 : f g2 (n - 1)
+        !gs = f g threads
+    return gs
+
+boundedGen :: (Int, Int) -> RGen -> (Int, RGen)
+boundedGen (left, right) gen = (resultValue, newGen)
+  where
+    (!newValue, !newGen) = next gen
+    !resultValue = newValue `mod` (right - left + 1) + left
+
+thenGen :: (Int, Int) -> (Int, Int) -> RGen -> ((Int, Int), RGen)
+thenGen bounds1 bounds2 gen = ((value, newValue), newGen')
+  where
+    (!value, !newGen) = boundedGen bounds1 gen
+    (!newValue, !newGen') = boundedGen bounds2 newGen
+
+
+samples :: Int -> Int -> RGen -> IO ((Int, Int), RGen)
+samples sampleMax total = return . thenGen (1,sampleMax)  (0,total-1)
+
+#elif defined(TFRANDOM)
+
+import System.Random.TF
+import System.Random.TF.Init
+import Control.Monad.Random
+
+type RGen = TFGen
+
+initGen :: IO RGen
+initGen = newTFGen
+
+initGens :: Int -> IO [RGen]
+initGens threads = do
+    g <- initGen
+    let f _ 0   = []
+        f !g !n = let (g1, g2) = split g
+                    in g1 : f g2 (n - 1)
+        !gs = f g threads
+    return gs
+
+samples :: Int -> Int -> RGen -> IO ((Int, Int), RGen)
+samples sampleMax total g = return $ flip runRand g
+                                   $ (,) <$> getRandomR (1,sampleMax)
+                                         <*> getRandomR (0,total-1)
+
+
 #elif defined(LINE)
 
 type RGen = IORef Int
@@ -82,6 +176,22 @@ type RGen = GenIO
 
 initGens :: Int -> IO [RGen]
 initGens threads = mapM initialize (map fromIntegral [1..threads])
+
+samples :: Int -> Int -> RGen -> IO ((Int, Int), RGen)
+samples sampleMax total g = do
+    r <- uniformB sampleMax g
+    v <- uniformB (total - 2) g
+    return ((r, v+1), g)
+
+#elif defined(SPLITMIX_NEW)
+
+import System.Random.SplitMix.GenIO
+import System.Random.SplitMix.Variate
+
+type RGen = SplitMixGen
+
+initGens :: Int -> IO [RGen]
+initGens threads = mapM newSeededSplitMixGen (map fromIntegral [1..threads])
 
 samples :: Int -> Int -> RGen -> IO ((Int, Int), RGen)
 samples sampleMax total g = do
